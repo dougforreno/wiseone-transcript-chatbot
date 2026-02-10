@@ -6,8 +6,8 @@ Changes are deployed automatically when you push to GitHub.
 """
 
 # --- Model Settings ---
-# Options: "claude-3-5-sonnet-20241022", "gpt-4o", "gpt-4o-mini"
-CHAT_MODEL = "claude-3-5-sonnet-20241022"
+# Options: "gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-20241022"
+CHAT_MODEL = "gpt-4o"
 
 # Temperature: 0.0 = deterministic, 1.0 = creative
 # For contemplative/spiritual content: 0.7-0.8 works well
