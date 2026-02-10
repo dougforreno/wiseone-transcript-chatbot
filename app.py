@@ -2,7 +2,7 @@
 Wiseone Transcript Chatbot — Streamlit App
 
 Chat with spiritual mentorship transcripts using RAG (Retrieval-Augmented Generation).
-Uses Supabase pgvector for semantic search and OpenAI for embeddings + chat.
+Uses Supabase pgvector for semantic search and OpenAI/Anthropic for embeddings + chat.
 """
 
 import os
@@ -14,27 +14,18 @@ from openai import OpenAI
 from supabase import create_client
 from dotenv import load_dotenv
 
+import config
+
 load_dotenv()
 
-# --- Config ---
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini")
-TOP_K = int(os.getenv("TOP_K", "5"))
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.65"))
-
-SYSTEM_PROMPT = """You are a knowledgeable assistant with access to transcripts from spiritual mentorship sessions with Matthew, a spiritual advisor and psychedelic medicine facilitator.
-
-Your role is to:
-- Answer questions about the teachings, concepts, and discussions from these sessions
-- Provide accurate quotes and references when possible
-- Explain spiritual concepts (non-duality, consciousness, energy work, etc.) as taught in these sessions
-- Be respectful and thoughtful about the sacred nature of this material
-- Always cite which session(s) your information comes from
-
-When citing sources, use the format: [Session: YYYY-MM-DD — Title]
-
-If you don't have enough context from the transcripts to answer a question, say so honestly rather than making things up."""
-
+# --- Config (from config.py for easy iteration) ---
+EMBEDDING_MODEL = config.EMBEDDING_MODEL
+CHAT_MODEL = config.CHAT_MODEL
+TEMPERATURE = config.TEMPERATURE
+MAX_TOKENS = config.MAX_TOKENS
+TOP_K = config.TOP_K
+SIMILARITY_THRESHOLD = config.SIMILARITY_THRESHOLD
+SYSTEM_PROMPT = config.SYSTEM_PROMPT
 
 # --- Initialize clients ---
 @st.cache_resource
@@ -44,7 +35,19 @@ def init_clients():
         os.getenv("SUPABASE_URL"),
         os.getenv("SUPABASE_SERVICE_KEY"),
     )
-    return openai_client, supabase_client
+    
+    # Initialize Anthropic if key available and model is Claude
+    anthropic_client = None
+    if "claude" in CHAT_MODEL.lower():
+        try:
+            import anthropic
+            anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        except ImportError:
+            st.error("Anthropic package not installed. Run: pip install anthropic")
+        except Exception as e:
+            st.warning(f"Anthropic client init failed: {e}")
+    
+    return openai_client, supabase_client, anthropic_client
 
 
 def get_embedding(client: OpenAI, text: str) -> list[float]:
@@ -105,19 +108,39 @@ def format_sources(chunks: list[dict]) -> list[dict]:
     return sources
 
 
-def chat_completion(client: OpenAI, messages: list[dict], context: str) -> str:
-    """Generate chat response with RAG context."""
+def chat_completion(openai_client, anthropic_client, messages: list[dict], context: str) -> str:
+    """Generate chat response with RAG context using OpenAI or Anthropic."""
     system_msg = SYSTEM_PROMPT + f"\n\n---\nRelevant transcript context:\n\n{context}"
-
-    full_messages = [{"role": "system", "content": system_msg}]
+    
     # Include last 10 messages for conversation context
-    full_messages.extend(messages[-10:])
+    recent_messages = messages[-10:]
 
-    response = client.chat.completions.create(
+    # Use Anthropic for Claude models
+    if anthropic_client and "claude" in CHAT_MODEL.lower():
+        # Convert messages to Anthropic format
+        anthropic_messages = []
+        for m in recent_messages:
+            role = "user" if m["role"] == "user" else "assistant"
+            anthropic_messages.append({"role": role, "content": m["content"]})
+        
+        response = anthropic_client.messages.create(
+            model=CHAT_MODEL,
+            max_tokens=MAX_TOKENS,
+            temperature=TEMPERATURE,
+            system=system_msg,
+            messages=anthropic_messages,
+        )
+        return response.content[0].text
+    
+    # Use OpenAI for GPT models
+    full_messages = [{"role": "system", "content": system_msg}]
+    full_messages.extend(recent_messages)
+
+    response = openai_client.chat.completions.create(
         model=CHAT_MODEL,
         messages=full_messages,
-        temperature=0.7,
-        max_tokens=2000,
+        temperature=TEMPERATURE,
+        max_tokens=MAX_TOKENS,
     )
     return response.choices[0].message.content
 
@@ -173,7 +196,7 @@ def main():
     st.title("🔮 Wiseone Transcript Chat")
     st.caption("Chat with spiritual mentorship session transcripts")
 
-    openai_client, supabase_client = init_clients()
+    openai_client, supabase_client, anthropic_client = init_clients()
 
     # --- Sidebar ---
     with st.sidebar:
@@ -261,7 +284,7 @@ def main():
                 ]
 
                 # Generate response
-                response = chat_completion(openai_client, api_messages, context)
+                response = chat_completion(openai_client, anthropic_client, api_messages, context)
 
             st.markdown(response)
 

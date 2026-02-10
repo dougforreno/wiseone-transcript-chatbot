@@ -28,7 +28,7 @@ Uses **Supabase** (pgvector) for vector storage, **OpenAI** for embeddings and c
 ### 2. Clone and install
 
 ```bash
-git clone https://github.com/yourusername/wiseone-transcript-chatbot.git
+git clone https://github.com/douginreno/wiseone-transcript-chatbot.git
 cd wiseone-transcript-chatbot
 python -m venv venv
 source venv/bin/activate
