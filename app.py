@@ -26,6 +26,7 @@ MAX_TOKENS = config.MAX_TOKENS
 TOP_K = config.TOP_K
 SIMILARITY_THRESHOLD = config.SIMILARITY_THRESHOLD
 SYSTEM_PROMPT = config.SYSTEM_PROMPT
+STARTER_QUESTIONS = config.STARTER_QUESTIONS
 
 # --- Initialize clients ---
 @st.cache_resource
@@ -35,7 +36,7 @@ def init_clients():
         os.getenv("SUPABASE_URL"),
         os.getenv("SUPABASE_SERVICE_KEY"),
     )
-    
+
     # Initialize Anthropic if key available and model is Claude
     anthropic_client = None
     if "claude" in CHAT_MODEL.lower():
@@ -46,7 +47,7 @@ def init_clients():
             st.error("Anthropic package not installed. Run: pip install anthropic")
         except Exception as e:
             st.warning(f"Anthropic client init failed: {e}")
-    
+
     return openai_client, supabase_client, anthropic_client
 
 
@@ -123,11 +124,12 @@ Before answering, silently reflect:
 1. What deeper theme or wisdom thread connects these passages?
 2. What would Matthew want the questioner to *feel* or *realize*?
 3. What's the essence here — not the facts, but the truth?
+4. How would this wisdom show up practically — on an ordinary Tuesday?
 
 Write a brief private reflection (2-3 sentences) that captures the soul of this wisdom."""
 
     response = client.chat.completions.create(
-        model=CHAT_MODEL,
+        model=CHAT_MODEL if "gpt" in CHAT_MODEL.lower() else "gpt-4o-mini",
         messages=[{"role": "user", "content": reflection_prompt}],
         temperature=TEMPERATURE,
         max_tokens=300,
@@ -137,17 +139,17 @@ Write a brief private reflection (2-3 sentences) that captures the soul of this 
 
 def chat_completion(openai_client, anthropic_client, messages: list[dict], context: str) -> str:
     """Generate chat response with RAG context using OpenAI or Anthropic."""
-    
+
     # Get the user's question (last user message)
     user_question = ""
     for m in reversed(messages):
         if m["role"] == "user":
             user_question = m["content"]
             break
-    
+
     # Step 1: Contemplative synthesis (internal reflection)
     reflection = contemplative_synthesis(openai_client, context, user_question)
-    
+
     # Step 2: Generate the actual response with reflection woven in
     system_msg = SYSTEM_PROMPT + f"""
 
@@ -156,9 +158,9 @@ Relevant transcript context:
 {context}
 
 ---
-Your private reflection on this wisdom (use to inform your tone and synthesis):
+Your private reflection on this wisdom (use to inform your tone and synthesis, don't repeat verbatim):
 {reflection}"""
-    
+
     # Include last 10 messages for conversation context
     recent_messages = messages[-10:]
 
@@ -169,7 +171,7 @@ Your private reflection on this wisdom (use to inform your tone and synthesis):
         for m in recent_messages:
             role = "user" if m["role"] == "user" else "assistant"
             anthropic_messages.append({"role": role, "content": m["content"]})
-        
+
         response = anthropic_client.messages.create(
             model=CHAT_MODEL,
             max_tokens=MAX_TOKENS,
@@ -178,7 +180,7 @@ Your private reflection on this wisdom (use to inform your tone and synthesis):
             messages=anthropic_messages,
         )
         return response.content[0].text
-    
+
     # Use OpenAI for GPT models
     full_messages = [{"role": "system", "content": system_msg}]
     full_messages.extend(recent_messages)
@@ -231,6 +233,46 @@ def get_transcript_stats(supabase_client) -> dict:
         return {"error": str(e), "transcript_count": 0, "chunk_count": 0}
 
 
+def process_question(prompt: str, openai_client, supabase_client, anthropic_client, top_k: int, show_sources: bool):
+    """Process a user question through the RAG pipeline and display results."""
+    # Add user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Generate response
+    with st.chat_message("assistant"):
+        with st.spinner("Searching transcripts..."):
+            query_embedding = get_embedding(openai_client, prompt)
+            chunks = search_transcripts(supabase_client, query_embedding, top_k=top_k)
+            context = build_context(chunks)
+            sources = format_sources(chunks)
+
+        with st.spinner("Reflecting..."):
+            api_messages = [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.messages
+            ]
+            response = chat_completion(openai_client, anthropic_client, api_messages, context)
+
+        st.markdown(response)
+
+        if sources and show_sources:
+            with st.expander("📖 Sources"):
+                for src in sources:
+                    st.markdown(
+                        f"- **{src['date']}** — {src['title']}"
+                        + (f" > {src['section']}" if src.get('section') else "")
+                        + f" ({src['similarity']:.0%} match)"
+                    )
+
+    # Save
+    msg_data = {"role": "assistant", "content": response, "sources": sources}
+    st.session_state.messages.append(msg_data)
+    save_message(supabase_client, st.session_state.conversation_id, "user", prompt)
+    save_message(supabase_client, st.session_state.conversation_id, "assistant", response, sources)
+
+
 # --- Streamlit UI ---
 
 def main():
@@ -240,8 +282,17 @@ def main():
         layout="wide",
     )
 
+    # Custom CSS for cleaner look
+    st.markdown("""
+    <style>
+    .stApp { max-width: 1200px; margin: 0 auto; }
+    .starter-btn button { text-align: left !important; }
+    div[data-testid="stExpander"] { border: 1px solid #333; border-radius: 8px; }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.title("🔮 Wiseone Transcript Chat")
-    st.caption("Chat with spiritual mentorship session transcripts")
+    st.caption("Explore the wisdom from sacred mentorship sessions with Matthew — ask anything")
 
     openai_client, supabase_client, anthropic_client = init_clients()
 
@@ -251,8 +302,9 @@ def main():
 
         stats = get_transcript_stats(supabase_client)
         if "error" not in stats:
-            st.metric("Sessions", stats["transcript_count"])
-            st.metric("Searchable Chunks", stats["chunk_count"])
+            col1, col2 = st.columns(2)
+            col1.metric("Sessions", stats["transcript_count"])
+            col2.metric("Chunks", stats["chunk_count"])
 
             if stats["transcripts"]:
                 st.divider()
@@ -261,16 +313,15 @@ def main():
                     themes = ", ".join((t.get("themes") or [])[:2])
                     label = f"**{t['session_date']}**"
                     if t.get("title"):
-                        # Truncate long titles
                         title = t["title"][:60] + "..." if len(t["title"]) > 60 else t["title"]
                         label += f"\n{title}"
                     if themes:
                         label += f"\n_{themes}_"
                     st.markdown(label, unsafe_allow_html=False)
-                    st.caption("")  # spacing
+                    st.caption("")
         else:
             st.warning(f"Could not load stats: {stats['error']}")
-            st.info("Make sure you've run the migration and ingestion scripts.")
+            st.info("Run the migration and ingestion scripts first.")
 
         st.divider()
         if st.button("🗑️ Clear Chat", use_container_width=True):
@@ -303,53 +354,20 @@ def main():
                             + f" ({src['similarity']:.0%} match)"
                         )
 
+    # --- Starter questions (only show when chat is empty) ---
+    if not st.session_state.messages:
+        st.markdown("### ✨ Start exploring")
+        st.markdown("*Ask anything about the sessions, or try one of these:*")
+        cols = st.columns(2)
+        for i, question in enumerate(STARTER_QUESTIONS):
+            col = cols[i % 2]
+            if col.button(f"💬 {question}", key=f"starter_{i}", use_container_width=True):
+                process_question(question, openai_client, supabase_client, anthropic_client, top_k, show_sources)
+                st.rerun()
+
     # --- Chat input ---
     if prompt := st.chat_input("Ask about the transcripts..."):
-        # Display user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Generate response
-        with st.chat_message("assistant"):
-            with st.spinner("Searching transcripts..."):
-                # Get embedding for query
-                query_embedding = get_embedding(openai_client, prompt)
-
-                # Search for relevant chunks
-                chunks = search_transcripts(supabase_client, query_embedding, top_k=top_k)
-
-                # Build context
-                context = build_context(chunks)
-                sources = format_sources(chunks)
-
-            with st.spinner("Thinking..."):
-                # Build message history for API
-                api_messages = [
-                    {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.messages
-                ]
-
-                # Generate response
-                response = chat_completion(openai_client, anthropic_client, api_messages, context)
-
-            st.markdown(response)
-
-            if sources and show_sources:
-                with st.expander("📖 Sources"):
-                    for src in sources:
-                        st.markdown(
-                            f"- **{src['date']}** — {src['title']}"
-                            + (f" > {src['section']}" if src.get('section') else "")
-                            + f" ({src['similarity']:.0%} match)"
-                        )
-
-        # Save to state and DB
-        msg_data = {"role": "assistant", "content": response, "sources": sources}
-        st.session_state.messages.append(msg_data)
-
-        save_message(supabase_client, st.session_state.conversation_id, "user", prompt)
-        save_message(supabase_client, st.session_state.conversation_id, "assistant", response, sources)
+        process_question(prompt, openai_client, supabase_client, anthropic_client, top_k, show_sources)
 
 
 if __name__ == "__main__":
