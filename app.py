@@ -57,12 +57,13 @@ def get_embedding(client: OpenAI, text: str) -> list[float]:
     return response.data[0].embedding
 
 
-def search_transcripts(supabase_client, query_embedding: list[float], top_k: int = TOP_K) -> list[dict]:
-    """Search for relevant transcript chunks using vector similarity."""
+def search_transcripts(supabase_client, query_embedding: list[float], query_text: str = "", top_k: int = TOP_K) -> list[dict]:
+    """Search for relevant transcript chunks using hybrid vector + keyword search."""
     result = supabase_client.rpc(
-        "match_transcript_chunks",
+        "match_transcript_chunks_hybrid",
         {
             "query_embedding": query_embedding,
+            "query_text": query_text,
             "match_threshold": SIMILARITY_THRESHOLD,
             "match_count": top_k,
         },
@@ -244,7 +245,7 @@ def process_question(prompt: str, openai_client, supabase_client, anthropic_clie
     with st.chat_message("assistant"):
         with st.spinner("Searching transcripts..."):
             query_embedding = get_embedding(openai_client, prompt)
-            chunks = search_transcripts(supabase_client, query_embedding, top_k=top_k)
+            chunks = search_transcripts(supabase_client, query_embedding, query_text=prompt, top_k=top_k)
             context = build_context(chunks)
             sources = format_sources(chunks)
 
