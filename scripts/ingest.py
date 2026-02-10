@@ -145,7 +145,7 @@ def get_embeddings(texts: list[str]) -> list[list[float]]:
 
 # --- Ingestion ---
 
-def ingest_transcript(filepath: Path, dry_run: bool = False) -> dict:
+def ingest_transcript(filepath: Path, dry_run: bool = False, force: bool = False) -> dict:
     """Ingest a single transcript file."""
     print(f"\n📄 Processing: {filepath.name}")
 
@@ -167,9 +167,14 @@ def ingest_transcript(filepath: Path, dry_run: bool = False) -> dict:
 
     # Check if already ingested
     existing = supabase.table("transcripts").select("id").eq("filename", doc["filename"]).execute()
-    if existing.data:
+    if existing.data and not force:
         print(f"   ⚠️  Already exists (id={existing.data[0]['id']}), skipping. Use --force to re-ingest.")
         return {"filename": doc["filename"], "skipped": True}
+    
+    # Delete existing if force mode
+    if existing.data and force:
+        print(f"   🗑️  Deleting existing (id={existing.data[0]['id']})...")
+        supabase.table("transcripts").delete().eq("id", existing.data[0]["id"]).execute()
 
     # Insert transcript record
     result = supabase.table("transcripts").insert({
@@ -238,7 +243,7 @@ def main():
     results = []
     for f in files:
         try:
-            result = ingest_transcript(f, dry_run=args.dry_run)
+            result = ingest_transcript(f, dry_run=args.dry_run, force=args.force)
             results.append(result)
         except Exception as e:
             print(f"   ❌ Error: {e}")
