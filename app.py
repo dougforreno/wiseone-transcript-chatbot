@@ -108,9 +108,56 @@ def format_sources(chunks: list[dict]) -> list[dict]:
     return sources
 
 
+def contemplative_synthesis(client, context: str, user_question: str) -> str:
+    """Step 1: Reflect on the retrieved passages to find the deeper thread."""
+    reflection_prompt = f"""You are preparing to share wisdom from spiritual mentorship transcripts.
+
+The user asks: "{user_question}"
+
+Here are relevant transcript excerpts:
+---
+{context}
+---
+
+Before answering, silently reflect:
+1. What deeper theme or wisdom thread connects these passages?
+2. What would Matthew want the questioner to *feel* or *realize*?
+3. What's the essence here — not the facts, but the truth?
+
+Write a brief private reflection (2-3 sentences) that captures the soul of this wisdom."""
+
+    response = client.chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[{"role": "user", "content": reflection_prompt}],
+        temperature=TEMPERATURE,
+        max_tokens=300,
+    )
+    return response.choices[0].message.content
+
+
 def chat_completion(openai_client, anthropic_client, messages: list[dict], context: str) -> str:
     """Generate chat response with RAG context using OpenAI or Anthropic."""
-    system_msg = SYSTEM_PROMPT + f"\n\n---\nRelevant transcript context:\n\n{context}"
+    
+    # Get the user's question (last user message)
+    user_question = ""
+    for m in reversed(messages):
+        if m["role"] == "user":
+            user_question = m["content"]
+            break
+    
+    # Step 1: Contemplative synthesis (internal reflection)
+    reflection = contemplative_synthesis(openai_client, context, user_question)
+    
+    # Step 2: Generate the actual response with reflection woven in
+    system_msg = SYSTEM_PROMPT + f"""
+
+---
+Relevant transcript context:
+{context}
+
+---
+Your private reflection on this wisdom (use to inform your tone and synthesis):
+{reflection}"""
     
     # Include last 10 messages for conversation context
     recent_messages = messages[-10:]
