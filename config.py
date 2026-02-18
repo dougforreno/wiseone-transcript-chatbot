@@ -18,7 +18,7 @@ MAX_TOKENS = 2000
 
 # --- Retrieval Settings ---
 # Number of transcript chunks to retrieve for context
-TOP_K = 8
+TOP_K = 15
 
 # Similarity threshold for vector search (0.0-1.0)
 # Lower = more results, higher = stricter matching

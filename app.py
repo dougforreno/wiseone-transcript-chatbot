@@ -234,7 +234,7 @@ def get_transcript_stats(supabase_client) -> dict:
         return {"error": str(e), "transcript_count": 0, "chunk_count": 0}
 
 
-def process_question(prompt: str, openai_client, supabase_client, anthropic_client, top_k: int, show_sources: bool):
+def process_question(prompt: str, openai_client, supabase_client, anthropic_client, show_sources: bool):
     """Process a user question through the RAG pipeline and display results."""
     # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -245,7 +245,7 @@ def process_question(prompt: str, openai_client, supabase_client, anthropic_clie
     with st.chat_message("assistant"):
         with st.spinner("Searching transcripts..."):
             query_embedding = get_embedding(openai_client, prompt)
-            chunks = search_transcripts(supabase_client, query_embedding, query_text=prompt, top_k=top_k)
+            chunks = search_transcripts(supabase_client, query_embedding, query_text=prompt, top_k=TOP_K)
             context = build_context(chunks)
             sources = format_sources(chunks)
 
@@ -332,7 +332,6 @@ def main():
 
         st.divider()
         st.caption("Settings")
-        top_k = st.slider("Sources to retrieve", 1, 10, TOP_K, key="top_k")
         show_sources = st.checkbox("Show source details", value=True, key="show_sources")
 
     # --- Init session state ---
@@ -363,12 +362,12 @@ def main():
         for i, question in enumerate(STARTER_QUESTIONS):
             col = cols[i % 2]
             if col.button(f"💬 {question}", key=f"starter_{i}", use_container_width=True):
-                process_question(question, openai_client, supabase_client, anthropic_client, top_k, show_sources)
+                process_question(question, openai_client, supabase_client, anthropic_client, show_sources)
                 st.rerun()
 
     # --- Chat input ---
     if prompt := st.chat_input("Ask about the transcripts..."):
-        process_question(prompt, openai_client, supabase_client, anthropic_client, top_k, show_sources)
+        process_question(prompt, openai_client, supabase_client, anthropic_client, show_sources)
 
 
 if __name__ == "__main__":
